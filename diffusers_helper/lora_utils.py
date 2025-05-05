@@ -4,6 +4,7 @@ from diffusers.loaders.lora_pipeline import _fetch_state_dict
 from diffusers.loaders.lora_conversion_utils import _convert_hunyuan_video_lora_to_diffusers
 from diffusers.utils.peft_utils import set_weights_and_activate_adapters
 from diffusers.loaders.peft import _SET_ADAPTER_SCALE_FN_MAPPING
+import torch
 
 def load_lora(transformer, lora_path: Path, weight_name: Optional[str] = "pytorch_lora_weights.safetensors"):
     """
@@ -17,25 +18,78 @@ def load_lora(transformer, lora_path: Path, weight_name: Optional[str] = "pytorc
     """
     
     state_dict = _fetch_state_dict(
-    lora_path,
-    weight_name,
-    True,
-    True,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None)
-
+        lora_path,
+        weight_name,
+        True,
+        True,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None)
 
     state_dict = _convert_hunyuan_video_lora_to_diffusers(state_dict)
     
-    transformer.load_lora_adapter(state_dict, network_alphas=None, adapter_name=weight_name.split(".")[0])
-    print("LoRA weights loaded successfully.")
+    adapter_name = weight_name.split(".")[0]
+    
+    # Check if adapter already exists and delete it if it does
+    if hasattr(transformer, 'peft_config') and adapter_name in transformer.peft_config:
+        print(f"Adapter '{adapter_name}' already exists. Removing it before loading again.")
+        # Use delete_adapters (plural) instead of delete_adapter
+        transformer.delete_adapters([adapter_name])
+    
+    # Load the adapter with the original name
+    transformer.load_lora_adapter(state_dict, network_alphas=None, adapter_name=adapter_name)
+    print(f"LoRA weights '{adapter_name}' loaded successfully.")
+    
     return transformer
+
+def unload_all_loras(transformer):
+    """
+    Completely unload all LoRA adapters from the transformer model.
+    """
+    if hasattr(transformer, 'peft_config') and transformer.peft_config:
+        # Get all adapter names
+        adapter_names = list(transformer.peft_config.keys())
+        
+        if adapter_names:
+            print(f"Removing all LoRA adapters: {', '.join(adapter_names)}")
+            # Delete all adapters
+            transformer.delete_adapters(adapter_names)
+            
+            # Force cleanup of any remaining adapter references
+            if hasattr(transformer, 'active_adapter'):
+                transformer.active_adapter = None
+                
+            # Clear any cached states
+            for module in transformer.modules():
+                if hasattr(module, 'lora_A'):
+                    if isinstance(module.lora_A, dict):
+                        module.lora_A.clear()
+                if hasattr(module, 'lora_B'):
+                    if isinstance(module.lora_B, dict):
+                        module.lora_B.clear()
+                if hasattr(module, 'scaling'):
+                    if isinstance(module.scaling, dict):
+                        module.scaling.clear()
+            
+            print("All LoRA adapters have been completely removed.")
+        else:
+            print("No LoRA adapters found to remove.")
+    else:
+        print("Model doesn't have any LoRA adapters or peft_config.")
+    
+    # Force garbage collection
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    return transformer
+
     
 # TODO(neph1): remove when HunyuanVideoTransformer3DModelPacked is in _SET_ADAPTER_SCALE_FN_MAPPING
 def set_adapters(

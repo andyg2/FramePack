@@ -1,0 +1,8 @@
+{
+    "output_dir": "G:\\FramePack\\webui\\outputs",
+    "metadata_dir": "G:\\FramePack\\webui\\outputs",
+    "lora_dir": "G:\\FramePack\\webui\\loras",
+    "gradio_temp_dir": "G:\\FramePack\\webui\\temp",
+    "auto_save_settings": true,
+    "gradio_theme": "huggingface"
+}
