@@ -31,9 +31,7 @@ def snap_to_section_boundaries(prompt_sections: List[PromptSection], latent_wind
         aligned_start = round(section.start_time / section_duration) * section_duration
         
         # Snap end time to nearest section boundary
-        aligned_end = None
-        if section.end_time is not None:
-            aligned_end = round(section.end_time / section_duration) * section_duration
+        aligned_end = round(section.end_time / section_duration) * section_duration if section.end_time is not None else None
         
         # Ensure minimum section length
         if aligned_end is not None and aligned_end <= aligned_start:
@@ -44,7 +42,8 @@ def snap_to_section_boundaries(prompt_sections: List[PromptSection], latent_wind
             start_time=aligned_start,
             end_time=aligned_end
         ))
-    
+    print("aligned_sections")
+    print(aligned_sections)
     return aligned_sections
 
 
@@ -64,8 +63,11 @@ def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_win
     """
     # Default prompt for the entire duration if no timestamps are found
     if "[" not in prompt_text or "]" not in prompt_text:
-        return [PromptSection(prompt=prompt_text.strip())]
-    
+        return [PromptSection(
+            prompt=prompt_text.strip(),
+            start_time=0,
+            end_time=total_duration
+        )]
     sections = []
     # Find all timestamp sections [time: text]
     timestamp_pattern = r'\[(\d+(?:\.\d+)?s)(?:-(\d+(?:\.\d+)?s))?\s*:\s*(.*?)\]'
@@ -101,6 +103,13 @@ def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_win
     # Sort sections by start time
     sections.sort(key=lambda x: x.start_time)
     
+    print("sections1")
+    print(sections)
+    
+    # Reverse sections for reverse generation (only for Original type)
+    if generation_type == "Original":
+        sections.reverse()
+    
     # Fill in end times if not specified
     for i in range(len(sections) - 1):
         if sections[i].end_time is None:
@@ -113,12 +122,45 @@ def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_win
     # Snap timestamps to section boundaries
     sections = snap_to_section_boundaries(sections, latent_window_size)
     
-    # Only reverse timestamps for Original generation type
+    # Adjust timestamps to align with model's internal section boundaries
+    sections.sort(key=lambda x: x.start_time)
+    
+    # --- Contract overlaps / Expand gaps ---
+    adjusted_sections = [sections[0]]
+    for i in range(1, len(sections)):
+        prev = adjusted_sections[-1]
+        curr = sections[i]
+
+        # Midpoint to resolve either overlap or gap
+        midpoint = (prev.end_time + curr.start_time) / 2
+
+        if prev.end_time > curr.start_time:
+            # Overlap: contract both
+            prev.end_time = midpoint
+            curr.start_time = midpoint
+        elif prev.end_time < curr.start_time:
+            # Gap: expand both
+            prev.end_time = midpoint
+            curr.start_time = midpoint
+
+        adjusted_sections[-1] = prev
+        adjusted_sections.append(curr)
+
+    # Ensure start at 0 and end at total_duration
+    if adjusted_sections[0].start_time > 0:
+        adjusted_sections[0].start_time = 0
+    if adjusted_sections[-1].end_time < total_duration:
+        adjusted_sections[-1].end_time = total_duration
+
+    print("adjusted_sections")
+    print(adjusted_sections)
+    
+    
+    # Reverse for Original generation
     if generation_type == "Original":
-        # Now reverse the timestamps to account for reverse generation
         reversed_sections = []
-        for section in sections:
-            reversed_start = total_duration - section.end_time if section.end_time is not None else 0
+        for section in adjusted_sections:
+            reversed_start = total_duration - section.end_time
             reversed_end = total_duration - section.start_time
             reversed_sections.append(PromptSection(
                 prompt=section.prompt,
@@ -130,7 +172,7 @@ def parse_timestamped_prompt(prompt_text: str, total_duration: float, latent_win
         reversed_sections.sort(key=lambda x: x.start_time)
         return reversed_sections
     
-    return sections
+    return adjusted_sections
 
 
 def get_section_boundaries(latent_window_size: int = 9, count: int = 10) -> str:
